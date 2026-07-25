@@ -1,0 +1,122 @@
+name: Build packages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            branch: linux_x64
+            system: linux_x86_64
+          - os: macos-13
+            branch: darwin_x64
+            system: darwin_x86_64
+          - os: macos-14
+            branch: darwin_arm64
+            system: darwin_arm64
+          - os: windows-latest
+            branch: windows_x64
+            system: windows_amd64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------- Linux ----------------
+      - name: Deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libgmp-dev libmpfr-dev libexpat1-dev patchelf
+      - name: Build (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash build.sh
+      - name: Package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -e
+          B=gdb-16.3/build/gdb
+          GDBBIN="$B/gdb"; [ -x "$B/.libs/gdb" ] && GDBBIN="$B/.libs/gdb"
+          mkdir -p pkg/bin
+          cp "$GDBBIN" pkg/bin/i8085-elf-gdb
+          # bundle non-glibc-core shared libs next to the binary
+          ldd pkg/bin/i8085-elf-gdb | awk '/=> \//{print $3}' \
+            | grep -vE '/(libc|libm|libdl|libpthread|librt|libresolv|ld-linux)' \
+            | while read -r lib; do cp -n "$lib" pkg/bin/ || true; done
+          patchelf --set-rpath '$ORIGIN' pkg/bin/i8085-elf-gdb
+          for so in pkg/bin/*.so*; do patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true; done
+          cp -r "$B/data-directory" pkg/share-gdb 2>/dev/null || true
+
+      # ---------------- macOS ----------------
+      - name: Deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gmp mpfr expat dylibbundler
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: bash build.sh
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          B=gdb-16.3/build/gdb
+          GDBBIN="$B/gdb"; [ -x "$B/.libs/gdb" ] && GDBBIN="$B/.libs/gdb"
+          mkdir -p pkg/bin
+          cp "$GDBBIN" pkg/bin/i8085-elf-gdb
+          dylibbundler -b -x pkg/bin/i8085-elf-gdb -d pkg/bin/libs -p '@loader_path/libs/' -of
+          cp -r "$B/data-directory" pkg/share-gdb 2>/dev/null || true
+
+      # ---------------- Windows (MSYS2 MinGW) ----------------
+      - name: Setup MSYS2
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-gmp mingw-w64-x86_64-mpfr
+            mingw-w64-x86_64-expat make tar patch
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: GDB_HOST=x86_64-w64-mingw32 bash build.sh
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -e
+          B=gdb-16.3/build/gdb
+          mkdir -p pkg/bin
+          cp "$B/.libs/gdb.exe" pkg/bin/i8085-elf-gdb.exe
+          # bundle mingw runtime DLLs the binary needs
+          ldd pkg/bin/i8085-elf-gdb.exe | awk '/mingw64/{print $3}' \
+            | while read -r dll; do cp -n "$dll" pkg/bin/ || true; done
+          cp -r "$B/data-directory" pkg/share-gdb 2>/dev/null || true
+
+      # ---------------- package.json + smoke test + publish ----------------
+      - name: Manifest + smoke test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          m = json.load(open("package.json"))
+          m["system"] = ["${{ matrix.system }}"]
+          json.dump(m, open("pkg/package.json", "w"), indent=2)
+          PY
+          if [ "${{ runner.os }}" = "Windows" ]; then GDB=pkg/bin/i8085-elf-gdb.exe; else GDB=pkg/bin/i8085-elf-gdb; fi
+          "$GDB" -nx -q -batch -ex "set architecture i8085" -ex "show version" | head -2
+      - name: Publish ${{ matrix.branch }}
+        shell: bash
+        run: |
+          cd pkg
+          git init -q
+          git checkout -b "${{ matrix.branch }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Build ${{ matrix.branch }} from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "${{ matrix.branch }}"
