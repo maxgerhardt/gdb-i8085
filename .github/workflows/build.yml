@@ -9,6 +9,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Drop TUI (ncurses) and zstd to keep the dependency set small and static-friendly.
+  EXTRA_CONFIGURE: "--disable-tui --without-zstd"
+
 jobs:
   build:
     strategy:
@@ -30,51 +34,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ---------------- Linux ----------------
-      - name: Deps (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libgmp-dev libmpfr-dev libexpat1-dev patchelf
+      # ---------------- Linux: fully static ----------------
       - name: Build (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: bash build.sh
-      - name: Package (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        env:
+          LDFLAGS: -static
         run: |
-          set -e
+          sudo apt-get update
+          sudo apt-get install -y libgmp-dev libmpfr-dev libexpat1-dev zlib1g-dev
+          bash build.sh
           B=gdb-16.3/build/gdb
           GDBBIN="$B/gdb"; [ -x "$B/.libs/gdb" ] && GDBBIN="$B/.libs/gdb"
-          mkdir -p pkg/bin
-          cp "$GDBBIN" pkg/bin/i8085-elf-gdb
-          # bundle non-glibc-core shared libs next to the binary
-          ldd pkg/bin/i8085-elf-gdb | awk '/=> \//{print $3}' \
-            | grep -vE '/(libc|libm|libdl|libpthread|librt|libresolv|ld-linux)' \
-            | while read -r lib; do cp -n "$lib" pkg/bin/ || true; done
-          patchelf --set-rpath '$ORIGIN' pkg/bin/i8085-elf-gdb
-          for so in pkg/bin/*.so*; do patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true; done
-          cp -r "$B/data-directory" pkg/share-gdb 2>/dev/null || true
+          mkdir -p pkg/bin && cp "$GDBBIN" pkg/bin/i8085-elf-gdb
+          echo "--- not-a-dynamic-exec check ---"; file pkg/bin/i8085-elf-gdb; ldd pkg/bin/i8085-elf-gdb || true
 
-      # ---------------- macOS ----------------
-      - name: Deps (macOS)
-        if: runner.os == 'macOS'
-        run: brew install gmp mpfr expat dylibbundler
+      # ---------------- macOS: static gmp/mpfr/expat, system libs otherwise ----------------
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: |
+          brew install gmp mpfr expat
+          # remove the shared libs so the linker statically links the .a archives
+          for p in gmp mpfr expat; do rm -f "$(brew --prefix $p)"/lib/*.dylib; done
           export CPPFLAGS="-I$(brew --prefix gmp)/include -I$(brew --prefix mpfr)/include -I$(brew --prefix expat)/include"
           export LDFLAGS="-L$(brew --prefix gmp)/lib -L$(brew --prefix mpfr)/lib -L$(brew --prefix expat)/lib"
           bash build.sh
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          set -e
           B=gdb-16.3/build/gdb
           GDBBIN="$B/gdb"; [ -x "$B/.libs/gdb" ] && GDBBIN="$B/.libs/gdb"
-          mkdir -p pkg/bin
-          cp "$GDBBIN" pkg/bin/i8085-elf-gdb
-          dylibbundler -b -x pkg/bin/i8085-elf-gdb -d pkg/bin/libs -p '@loader_path/libs/' -of
-          cp -r "$B/data-directory" pkg/share-gdb 2>/dev/null || true
+          mkdir -p pkg/bin && cp "$GDBBIN" pkg/bin/i8085-elf-gdb
+          echo "--- linkage (only system libs expected) ---"; otool -L pkg/bin/i8085-elf-gdb
 
-      # ---------------- Windows (MSYS2 MinGW) ----------------
+      # ---------------- Windows: fully static (MSYS2 MinGW) ----------------
       - name: Setup MSYS2
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -83,25 +72,19 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc mingw-w64-x86_64-gmp mingw-w64-x86_64-mpfr
-            mingw-w64-x86_64-expat make tar patch curl coreutils
+            mingw-w64-x86_64-expat mingw-w64-x86_64-zlib make tar patch curl coreutils
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: bash build.sh
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
+        env:
+          LDFLAGS: -static
         run: |
-          set -e
+          bash build.sh
           B=gdb-16.3/build/gdb
-          mkdir -p pkg/bin
-          cp "$B/.libs/gdb.exe" pkg/bin/i8085-elf-gdb.exe
-          # bundle mingw runtime DLLs the binary needs
-          ldd pkg/bin/i8085-elf-gdb.exe | awk '/mingw64/{print $3}' \
-            | while read -r dll; do cp -n "$dll" pkg/bin/ || true; done
-          cp -r "$B/data-directory" pkg/share-gdb 2>/dev/null || true
+          mkdir -p pkg/bin && cp "$B/.libs/gdb.exe" pkg/bin/i8085-elf-gdb.exe
+          echo "--- DLL deps (want none from mingw) ---"; ldd pkg/bin/i8085-elf-gdb.exe | grep -i mingw || echo "no mingw DLL deps (static OK)"
 
-      # ---------------- package.json + smoke test + publish ----------------
+      # ---------------- manifest + smoke test + publish ----------------
       - name: Manifest + smoke test
         shell: bash
         run: |
@@ -112,10 +95,9 @@ jobs:
           json.dump(m, open("pkg/package.json", "w"), indent=2)
           PY
           if [ "${{ runner.os }}" = "Windows" ]; then GDB=pkg/bin/i8085-elf-gdb.exe; else GDB=pkg/bin/i8085-elf-gdb; fi
-          echo "--- deps ---"; (ldd "$GDB" 2>/dev/null || otool -L "$GDB" 2>/dev/null) | head -30 || true
-          "$GDB" -nx -q -batch -ex "set architecture i8085" -ex "show configuration" > ver.txt 2>&1 || true
-          echo "--- gdb output ---"; head -3 ver.txt
-          grep -q 'set to "i8085"' ver.txt && echo "i8085 OK" || (echo "WARNING: i8085 arch not confirmed" && true)
+          "$GDB" -nx -q -batch -ex "set architecture i8085" > ver.txt 2>&1 || true
+          cat ver.txt
+          grep -q 'set to "i8085"' ver.txt && echo "i8085 arch OK" || { echo "ERROR: i8085 not recognized"; exit 1; }
       - name: Publish ${{ matrix.branch }}
         shell: bash
         run: |

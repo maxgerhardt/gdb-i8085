@@ -21,10 +21,12 @@ cd "$SRC/build"
 CONFIG_HOST=""
 [ -n "$GDB_HOST" ] && CONFIG_HOST="--host=$GDB_HOST"
 
+# z80 target only (i8085 is a z80 bfd mach) -> much smaller, static-friendly.
+# Static/link flags come from the environment (LDFLAGS) set by the caller.
 ../configure $CONFIG_HOST --target=z80-unknown-elf \
-  --enable-targets=all \
   --disable-binutils --disable-ld --disable-gas --disable-gprof --disable-sim \
-  --with-expat --without-python --disable-nls --disable-werror
+  --with-expat --without-python --disable-nls --disable-werror \
+  $EXTRA_CONFIGURE
 
 JOBS="$( (nproc 2>/dev/null) || (sysctl -n hw.ncpu 2>/dev/null) || echo 4 )"
 make -j"$JOBS" all-gdb
