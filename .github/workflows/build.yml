@@ -25,20 +25,19 @@ jobs:
           - os: macos-14
             branch: darwin_arm64
             system: darwin_arm64
-          - os: windows-latest
-            branch: windows_x64
-            system: windows_amd64
+          # Windows is published from a manually-built branch for now (the MSYS2
+          # mingw gdb build needs more work); Linux/macOS are built here.
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      # ---------------- Linux: static gmp/mpfr/expat + C++ runtime; glibc dynamic ----------------
+      # ---------------- Linux: static gmp/mpfr/expat; system libstdc++/glibc (always present) ----------------
+      # Mirrors the working macOS recipe: remove the shared libs so the linker
+      # picks the .a archives; no -static LDFLAGS (that broke configure's link test).
       - name: Build (Linux)
         if: matrix.os == 'ubuntu-latest'
-        env:
-          LDFLAGS: -static-libgcc -static-libstdc++
         run: |
           sudo apt-get update
           sudo apt-get install -y libgmp-dev libmpfr-dev libexpat1-dev zlib1g-dev
