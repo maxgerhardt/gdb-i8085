@@ -112,12 +112,28 @@ jobs:
           grep -q 'set to "i8085"' ver.txt && echo "i8085 arch OK" || { echo "ERROR: i8085 not recognized"; exit 1; }
       - name: Publish ${{ matrix.branch }}
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -e
           cd pkg
+          echo "=== pkg contents (sizes) ==="
+          du -ah . | sort -h | tail -20
+          echo "=== largest single files ==="
+          find . -type f -printf '%s\t%p\n' | sort -n | tail -10
           git init -q
           git checkout -b "${{ matrix.branch }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -q -m "Build ${{ matrix.branch }} from ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "${{ matrix.branch }}"
+          echo "=== pushing ==="
+          if ! git push -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "${{ matrix.branch }}" 2>push.err; then
+            echo "::group::push stderr"
+            cat push.err
+            echo "::endgroup::"
+            # surface the git error via annotations (full logs are 403 for non-admins)
+            while IFS= read -r line; do echo "::error::pushfail: $line"; done < push.err
+            exit 1
+          fi
+          echo "push OK"
