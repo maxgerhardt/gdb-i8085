@@ -34,17 +34,21 @@ jobs:
       - uses: actions/checkout@v4
 
       # ---------------- Linux: static gmp/mpfr/expat; system libstdc++/glibc (always present) ----------------
-      # Mirrors the working macOS recipe: remove the shared libs so the linker
-      # picks the .a archives; no -static LDFLAGS (that broke configure's link test).
+      # NB: do NOT delete the system .so's like the macOS recipe does — on Linux
+      # libgmp is a transitive dependency of apt/curl/gcc, so removing it breaks
+      # the whole runner. Instead put ONLY the .a archives in a private dir and
+      # search it first via -L, so ld links gmp/mpfr/expat statically while the
+      # system copies stay intact.
       - name: Build (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgmp-dev libmpfr-dev libexpat1-dev zlib1g-dev
-          # remove the shared libs so the linker statically links the .a archives
-          sudo rm -f /usr/lib/x86_64-linux-gnu/libgmp.so* \
-                     /usr/lib/x86_64-linux-gnu/libmpfr.so* \
-                     /usr/lib/x86_64-linux-gnu/libexpat.so*
+          mkdir -p "$PWD/staticlibs"
+          cp /usr/lib/x86_64-linux-gnu/libgmp.a \
+             /usr/lib/x86_64-linux-gnu/libmpfr.a \
+             /usr/lib/x86_64-linux-gnu/libexpat.a "$PWD/staticlibs/"
+          export LDFLAGS="-L$PWD/staticlibs"
           bash build.sh
           B=gdb-16.3/build/gdb
           GDBBIN="$B/gdb"; [ -x "$B/.libs/gdb" ] && GDBBIN="$B/.libs/gdb"
