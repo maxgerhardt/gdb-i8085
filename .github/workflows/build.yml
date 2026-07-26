@@ -34,19 +34,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ---------------- Linux: fully static ----------------
+      # ---------------- Linux: static gmp/mpfr/expat + C++ runtime; glibc dynamic ----------------
       - name: Build (Linux)
         if: matrix.os == 'ubuntu-latest'
         env:
-          LDFLAGS: -static
+          LDFLAGS: -static-libgcc -static-libstdc++
         run: |
           sudo apt-get update
           sudo apt-get install -y libgmp-dev libmpfr-dev libexpat1-dev zlib1g-dev
+          # remove the shared libs so the linker statically links the .a archives
+          sudo rm -f /usr/lib/x86_64-linux-gnu/libgmp.so* \
+                     /usr/lib/x86_64-linux-gnu/libmpfr.so* \
+                     /usr/lib/x86_64-linux-gnu/libexpat.so*
           bash build.sh
           B=gdb-16.3/build/gdb
           GDBBIN="$B/gdb"; [ -x "$B/.libs/gdb" ] && GDBBIN="$B/.libs/gdb"
           mkdir -p pkg/bin && cp "$GDBBIN" pkg/bin/i8085-elf-gdb
-          echo "--- not-a-dynamic-exec check ---"; file pkg/bin/i8085-elf-gdb; ldd pkg/bin/i8085-elf-gdb || true
+          echo "--- linkage (only glibc/system expected) ---"; file pkg/bin/i8085-elf-gdb; ldd pkg/bin/i8085-elf-gdb || true
 
       # ---------------- macOS: static gmp/mpfr/expat, system libs otherwise ----------------
       - name: Build (macOS)
@@ -77,12 +81,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         env:
-          LDFLAGS: -static
+          # Static C++/gcc runtime; bundle the few remaining mingw DLLs below so
+          # the package is self-contained (full -static on mingw is unreliable here).
+          LDFLAGS: -static-libgcc -static-libstdc++
         run: |
           bash build.sh
           B=gdb-16.3/build/gdb
           mkdir -p pkg/bin && cp "$B/.libs/gdb.exe" pkg/bin/i8085-elf-gdb.exe
-          echo "--- DLL deps (want none from mingw) ---"; ldd pkg/bin/i8085-elf-gdb.exe | grep -i mingw || echo "no mingw DLL deps (static OK)"
+          # bundle any remaining mingw runtime DLLs the binary needs
+          ldd pkg/bin/i8085-elf-gdb.exe | awk '/mingw64/{print $3}' \
+            | while read -r dll; do cp -n "$dll" pkg/bin/ || true; done
+          echo "--- bundled DLLs ---"; ls pkg/bin
 
       # ---------------- manifest + smoke test + publish ----------------
       - name: Manifest + smoke test
