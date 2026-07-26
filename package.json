@@ -1,0 +1,18 @@
+{
+  "name": "tool-gdb-i8085",
+  "version": "1.0.0",
+  "description": "GNU GDB 16.3 with Intel 8085 support (source-level debugging incl. stepping and undocumented opcodes) for the platform-intel_mcs85 PlatformIO platform.",
+  "keywords": [
+    "tool",
+    "debugger",
+    "gdb",
+    "i8085",
+    "8085",
+    "mcs-85"
+  ],
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxgerhardt/gdb-i8085"
+  }
+}
