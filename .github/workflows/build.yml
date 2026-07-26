@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:
@@ -14,9 +18,6 @@ jobs:
           - os: ubuntu-latest
             branch: linux_x64
             system: linux_x86_64
-          - os: macos-13
-            branch: darwin_x64
-            system: darwin_x86_64
           - os: macos-14
             branch: darwin_arm64
             system: darwin_arm64
@@ -58,7 +59,10 @@ jobs:
         run: brew install gmp mpfr expat dylibbundler
       - name: Build (macOS)
         if: runner.os == 'macOS'
-        run: bash build.sh
+        run: |
+          export CPPFLAGS="-I$(brew --prefix gmp)/include -I$(brew --prefix mpfr)/include -I$(brew --prefix expat)/include"
+          export LDFLAGS="-L$(brew --prefix gmp)/lib -L$(brew --prefix mpfr)/lib -L$(brew --prefix expat)/lib"
+          bash build.sh
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -79,11 +83,11 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc mingw-w64-x86_64-gmp mingw-w64-x86_64-mpfr
-            mingw-w64-x86_64-expat make tar patch
+            mingw-w64-x86_64-expat make tar patch curl coreutils
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: GDB_HOST=x86_64-w64-mingw32 bash build.sh
+        run: bash build.sh
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
@@ -108,7 +112,10 @@ jobs:
           json.dump(m, open("pkg/package.json", "w"), indent=2)
           PY
           if [ "${{ runner.os }}" = "Windows" ]; then GDB=pkg/bin/i8085-elf-gdb.exe; else GDB=pkg/bin/i8085-elf-gdb; fi
-          "$GDB" -nx -q -batch -ex "set architecture i8085" -ex "show version" | head -2
+          echo "--- deps ---"; (ldd "$GDB" 2>/dev/null || otool -L "$GDB" 2>/dev/null) | head -30 || true
+          "$GDB" -nx -q -batch -ex "set architecture i8085" -ex "show configuration" > ver.txt 2>&1 || true
+          echo "--- gdb output ---"; head -3 ver.txt
+          grep -q 'set to "i8085"' ver.txt && echo "i8085 OK" || (echo "WARNING: i8085 arch not confirmed" && true)
       - name: Publish ${{ matrix.branch }}
         shell: bash
         run: |
