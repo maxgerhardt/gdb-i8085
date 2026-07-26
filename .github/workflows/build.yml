@@ -53,7 +53,8 @@ jobs:
           B=gdb-16.3/build/gdb
           GDBBIN="$B/gdb"; [ -x "$B/.libs/gdb" ] && GDBBIN="$B/.libs/gdb"
           mkdir -p pkg/bin && cp "$GDBBIN" pkg/bin/i8085-elf-gdb
-          echo "--- linkage (only glibc/system expected) ---"; file pkg/bin/i8085-elf-gdb; ldd pkg/bin/i8085-elf-gdb || true
+          strip pkg/bin/i8085-elf-gdb   # drop debug symbols (unstripped is >100MB)
+          echo "--- size / linkage (only glibc/system expected) ---"; ls -l pkg/bin/i8085-elf-gdb; file pkg/bin/i8085-elf-gdb; ldd pkg/bin/i8085-elf-gdb || true
 
       # ---------------- macOS: static gmp/mpfr/expat, system libs otherwise ----------------
       - name: Build (macOS)
@@ -68,7 +69,8 @@ jobs:
           B=gdb-16.3/build/gdb
           GDBBIN="$B/gdb"; [ -x "$B/.libs/gdb" ] && GDBBIN="$B/.libs/gdb"
           mkdir -p pkg/bin && cp "$GDBBIN" pkg/bin/i8085-elf-gdb
-          echo "--- linkage (only system libs expected) ---"; otool -L pkg/bin/i8085-elf-gdb
+          strip pkg/bin/i8085-elf-gdb   # drop debug symbols (unstripped is >100MB)
+          echo "--- size / linkage (only system libs expected) ---"; ls -l pkg/bin/i8085-elf-gdb; otool -L pkg/bin/i8085-elf-gdb
 
       # ---------------- Windows: fully static (MSYS2 MinGW) ----------------
       - name: Setup MSYS2
@@ -91,6 +93,7 @@ jobs:
           bash build.sh
           B=gdb-16.3/build/gdb
           mkdir -p pkg/bin && cp "$B/.libs/gdb.exe" pkg/bin/i8085-elf-gdb.exe
+          strip pkg/bin/i8085-elf-gdb.exe   # drop debug symbols (unstripped is >100MB)
           # bundle any remaining mingw runtime DLLs the binary needs
           ldd pkg/bin/i8085-elf-gdb.exe | awk '/mingw64/{print $3}' \
             | while read -r dll; do cp -n "$dll" pkg/bin/ || true; done
@@ -117,10 +120,8 @@ jobs:
         run: |
           set -e
           cd pkg
-          echo "=== pkg contents (sizes) ==="
-          du -ah . | sort -h | tail -20
-          echo "=== largest single files ==="
-          find . -type f -printf '%s\t%p\n' | sort -n | tail -10
+          echo "=== pkg file sizes ==="
+          ls -lR .
           git init -q
           git checkout -b "${{ matrix.branch }}"
           git config user.name "github-actions[bot]"
